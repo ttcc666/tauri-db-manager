@@ -1,0 +1,28 @@
+:root {
+  font-family: "Manrope", "Segoe UI", "Helvetica Neue", system-ui, -apple-system, sans-serif;
+  background-color: #e9eef5;
+  color: #0f172a;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #e9eef5 0%, #d7e3f4 40%, #f5f7fb 100%);
+}
+
+#root,
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-shell .MuiPaper-root {
+  backdrop-filter: blur(6px);
+}
+
+.app-shell .MuiTableCell-root {
+  border-bottom-color: rgba(15, 23, 42, 0.08);
+}
+
+button, input, textarea, select {
+  font-family: inherit;
+}
