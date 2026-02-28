@@ -1,28 +1,159 @@
 :root {
-  font-family: "Manrope", "Segoe UI", "Helvetica Neue", system-ui, -apple-system, sans-serif;
-  background-color: #e9eef5;
-  color: #0f172a;
+  --font-sans: "Manrope", "Segoe UI", "Helvetica Neue", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, ui-monospace, monospace;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --surface-border: rgba(15, 23, 42, 0.08);
+  --surface-glass: rgba(255, 255, 255, 0.7);
+  --topbar-border: rgba(15, 23, 42, 0.08);
+  --bg-gradient:
+    radial-gradient(circle at 15% 15%, rgba(14, 165, 233, 0.16) 0%, transparent 35%),
+    radial-gradient(circle at 80% 0%, rgba(249, 115, 22, 0.14) 0%, transparent 28%),
+    linear-gradient(135deg, #ecf3fb 0%, #e4edf9 42%, #f6f9ff 100%);
+}
+
+body[data-theme="dark"] {
+  --surface-border: rgba(226, 232, 240, 0.14);
+  --surface-glass: rgba(15, 23, 42, 0.72);
+  --topbar-border: rgba(226, 232, 240, 0.16);
+  --bg-gradient:
+    radial-gradient(circle at 20% 12%, rgba(56, 189, 248, 0.2) 0%, transparent 34%),
+    radial-gradient(circle at 86% 4%, rgba(251, 146, 60, 0.13) 0%, transparent 26%),
+    linear-gradient(145deg, #0a1323 0%, #0b1729 45%, #101d33 100%);
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  background: linear-gradient(135deg, #e9eef5 0%, #d7e3f4 40%, #f5f7fb 100%);
+  font-family: var(--font-sans);
+  background: var(--bg-gradient);
+  transition: background-color 220ms ease, color 220ms ease;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+  background-size: 24px 24px;
+  mask-image: radial-gradient(circle at center, black 28%, transparent 95%);
+  z-index: 0;
 }
 
 #root,
 .app-shell {
   min-height: 100vh;
+  position: relative;
 }
 
-.app-shell .MuiPaper-root {
+.app-shell {
+  z-index: 1;
+}
+
+.top-bar {
+  backdrop-filter: saturate(160%) blur(12px);
+  border-bottom: 1px solid var(--topbar-border);
+}
+
+.toolbar-brand {
+  min-height: 38px;
+}
+
+.brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #06b6d4 0%, #0284c7 100%);
+  box-shadow: 0 0 0 4px rgba(2, 132, 199, 0.16);
+}
+
+.theme-button {
+  border: 1px solid var(--surface-border);
+  background: var(--surface-glass);
+}
+
+.panel {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--surface-border);
+  background: var(--surface-glass);
+  backdrop-filter: blur(10px) saturate(130%);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+}
+
+body[data-theme="dark"] .panel {
+  box-shadow: 0 16px 40px rgba(2, 6, 23, 0.42);
+}
+
+.path-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.path-panel::after {
+  content: "";
+  position: absolute;
+  inset: auto -80px -80px auto;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(14, 165, 233, 0.2) 0%, transparent 72%);
+  pointer-events: none;
+}
+
+.preview-panel .json-preview {
+  font-family: var(--font-mono);
+  letter-spacing: 0.1px;
+}
+
+.config-table .MuiTableHead-root .MuiTableCell-root {
   backdrop-filter: blur(6px);
 }
 
-.app-shell .MuiTableCell-root {
-  border-bottom-color: rgba(15, 23, 42, 0.08);
+.enter-fade {
+  animation: enter-fade 360ms ease both;
 }
 
-button, input, textarea, select {
+@keyframes enter-fade {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+button,
+input,
+textarea,
+select {
   font-family: inherit;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.55) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  background-color: rgba(100, 116, 139, 0.5);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(71, 85, 105, 0.75);
 }
