@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
     sync::Mutex,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tauri::Manager;
 use tokio::net::TcpStream;
@@ -13,8 +14,6 @@ use tokio_postgres::NoTls;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 const CONNECTION_TEST_TIMEOUT_MS: u64 = 5_000;
-const SNAPSHOT_DIR_NAME: &str = ".snapshots";
-const SNAPSHOT_KEEP_COUNT: usize = 5;
 
 struct AppState {
     db_path: Mutex<Option<PathBuf>>,
@@ -68,47 +67,6 @@ struct ValidationResult {
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SnapshotMeta {
-    file_name: String,
-    full_path: String,
-    created_at: String,
-    size: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DiffSummary {
-    added_count: usize,
-    removed_count: usize,
-    changed_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FieldChange {
-    field: String,
-    before: Option<String>,
-    after: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChangedEntry {
-    name: String,
-    field_changes: Vec<FieldChange>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SnapshotDiffResult {
-    summary: DiffSummary,
-    added: Vec<String>,
-    removed: Vec<String>,
-    changed: Vec<ChangedEntry>,
 }
 
 impl DatabaseEntry {
@@ -525,11 +483,42 @@ fn current_path(state: &tauri::State<AppState>) -> Result<PathBuf, String> {
         .ok_or_else(|| "请先设置配置文件路径".to_string())
 }
 
+fn map_read_file_error(path: &Path, err: std::io::Error) -> String {
+    match err.kind() {
+        ErrorKind::NotFound => format!("配置文件不存在: {}", path.display()),
+        ErrorKind::PermissionDenied => {
+            format!("读取配置文件权限不足: {}", path.display())
+        }
+        _ => format!("读取配置文件失败: {} ({})", path.display(), err),
+    }
+}
+
 fn read_database_file(path: &Path) -> Result<DatabaseFile, String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|err| format!("读取配置文件失败: {} ({})", path.display(), err))?;
+    let raw = fs::read_to_string(path).map_err(|err| map_read_file_error(path, err))?;
     serde_json::from_str::<DatabaseFile>(&raw)
         .map_err(|err| format!("解析配置文件失败: {} ({})", path.display(), err))
+}
+
+fn read_database_file_strict(path: &Path, action: &str) -> Result<DatabaseFile, String> {
+    read_database_file(path).map_err(|err| format!("{}前读取配置失败: {}", action, err))
+}
+
+fn merge_database_entries(
+    mut current: DatabaseFile,
+    incoming_entries: Vec<DatabaseEntry>,
+) -> DatabaseFile {
+    for incoming in incoming_entries {
+        if let Some(position) = current
+            .databases
+            .iter()
+            .position(|item| item.name == incoming.name)
+        {
+            current.databases[position] = incoming;
+        } else {
+            current.databases.push(incoming);
+        }
+    }
+    current
 }
 
 fn write_database_file(path: &Path, payload: &DatabaseFile) -> Result<(), String> {
@@ -551,294 +540,6 @@ fn resolve_absolute_path(raw_path: &str) -> PathBuf {
             .join(path);
     }
     path
-}
-
-fn snapshot_dir_for(target_file: &Path) -> Result<PathBuf, String> {
-    let parent = target_file
-        .parent()
-        .ok_or_else(|| format!("无法确定配置文件目录: {}", target_file.display()))?;
-    Ok(parent.join(SNAPSHOT_DIR_NAME))
-}
-
-fn create_snapshot_before_change(target_file: &Path) -> Result<(), String> {
-    if !target_file.exists() {
-        return Ok(());
-    }
-
-    let snapshot_dir = snapshot_dir_for(target_file)?;
-    fs::create_dir_all(&snapshot_dir)
-        .map_err(|err| format!("创建快照目录失败: {} ({})", snapshot_dir.display(), err))?;
-
-    let now = SystemTime::now();
-    let duration = now
-        .duration_since(UNIX_EPOCH)
-        .map_err(|err| format!("获取系统时间失败: {}", err))?;
-    let file_name = format!(
-        "database-{}-{}-{}.json",
-        duration.as_secs(),
-        duration.subsec_millis(),
-        std::process::id()
-    );
-    let snapshot_path = snapshot_dir.join(file_name);
-
-    fs::copy(target_file, &snapshot_path).map_err(|err| {
-        format!(
-            "创建快照失败: {} -> {} ({})",
-            target_file.display(),
-            snapshot_path.display(),
-            err
-        )
-    })?;
-
-    Ok(())
-}
-
-fn prune_snapshots(target_file: &Path, keep: usize) -> Result<(), String> {
-    let snapshot_dir = snapshot_dir_for(target_file)?;
-    if !snapshot_dir.exists() {
-        return Ok(());
-    }
-
-    let mut snapshots: Vec<(PathBuf, SystemTime)> = fs::read_dir(&snapshot_dir)
-        .map_err(|err| format!("读取快照目录失败: {} ({})", snapshot_dir.display(), err))?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file())
-        .filter(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| ext.eq_ignore_ascii_case("json"))
-                .unwrap_or(false)
-        })
-        .filter_map(|path| {
-            let modified = fs::metadata(&path)
-                .ok()
-                .and_then(|meta| meta.modified().ok())
-                .unwrap_or(UNIX_EPOCH);
-            Some((path, modified))
-        })
-        .collect();
-
-    snapshots.sort_by(|a, b| b.1.cmp(&a.1));
-    if snapshots.len() <= keep {
-        return Ok(());
-    }
-
-    for (path, _) in snapshots.into_iter().skip(keep) {
-        if let Err(err) = fs::remove_file(&path) {
-            eprintln!("删除旧快照失败: {} ({})", path.display(), err);
-        }
-    }
-
-    Ok(())
-}
-
-fn list_snapshots_for_target(target_file: &Path) -> Result<Vec<SnapshotMeta>, String> {
-    let snapshot_dir = snapshot_dir_for(target_file)?;
-    if !snapshot_dir.exists() {
-        return Ok(vec![]);
-    }
-
-    let mut entries: Vec<(PathBuf, SystemTime, u64)> = fs::read_dir(&snapshot_dir)
-        .map_err(|err| format!("读取快照目录失败: {} ({})", snapshot_dir.display(), err))?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file())
-        .filter(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| ext.eq_ignore_ascii_case("json"))
-                .unwrap_or(false)
-        })
-        .filter_map(|path| {
-            let metadata = fs::metadata(&path).ok()?;
-            let modified = metadata.modified().ok().unwrap_or(UNIX_EPOCH);
-            Some((path, modified, metadata.len()))
-        })
-        .collect();
-
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
-
-    Ok(entries
-        .into_iter()
-        .map(|(path, modified, size)| {
-            let created_at = modified
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs().to_string())
-                .unwrap_or_else(|_| "0".to_string());
-            SnapshotMeta {
-                file_name: path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                full_path: path.to_string_lossy().to_string(),
-                created_at,
-                size,
-            }
-        })
-        .collect())
-}
-
-fn ensure_snapshot_path(snapshot_file: &str, target_file: &Path) -> Result<PathBuf, String> {
-    let snapshot_dir = snapshot_dir_for(target_file)?;
-    let raw = snapshot_file.trim();
-    if raw.is_empty() {
-        return Err("快照路径不能为空".to_string());
-    }
-
-    let candidate = {
-        let candidate_path = PathBuf::from(raw);
-        if candidate_path.is_absolute() {
-            candidate_path
-        } else {
-            snapshot_dir.join(candidate_path)
-        }
-    };
-
-    let candidate_canonical = fs::canonicalize(&candidate).map_err(|err| {
-        format!(
-            "快照文件不存在或不可访问: {} ({})",
-            candidate.display(),
-            err
-        )
-    })?;
-    let dir_canonical = fs::canonicalize(&snapshot_dir).map_err(|err| {
-        format!(
-            "快照目录不存在或不可访问: {} ({})",
-            snapshot_dir.display(),
-            err
-        )
-    })?;
-
-    if !candidate_canonical.starts_with(&dir_canonical) {
-        return Err("仅允许恢复当前配置文件目录下的快照".to_string());
-    }
-
-    Ok(candidate_canonical)
-}
-
-fn option_bool_as_string(value: Option<bool>) -> Option<String> {
-    value.map(|v| if v { "true" } else { "false" }.to_string())
-}
-
-fn option_optimization_as_string(value: &Option<OptimizationSettings>) -> Option<String> {
-    value
-        .as_ref()
-        .and_then(|v| serde_json::to_string(v).ok())
-        .map(|v| v.trim().to_string())
-}
-
-fn push_field_change(
-    field_changes: &mut Vec<FieldChange>,
-    field: &str,
-    before: Option<String>,
-    after: Option<String>,
-) {
-    if before == after {
-        return;
-    }
-    field_changes.push(FieldChange {
-        field: field.to_string(),
-        before,
-        after,
-    });
-}
-
-fn build_changed_entry(snapshot: &DatabaseEntry, current: &DatabaseEntry) -> Option<ChangedEntry> {
-    let mut field_changes = Vec::new();
-    push_field_change(
-        &mut field_changes,
-        "dbType",
-        Some(current.db_type.clone()),
-        Some(snapshot.db_type.clone()),
-    );
-    push_field_change(
-        &mut field_changes,
-        "connectionString",
-        Some(current.connection_string.clone()),
-        Some(snapshot.connection_string.clone()),
-    );
-    push_field_change(
-        &mut field_changes,
-        "description",
-        current.description.clone(),
-        snapshot.description.clone(),
-    );
-    push_field_change(
-        &mut field_changes,
-        "isDefault",
-        option_bool_as_string(current.is_default),
-        option_bool_as_string(snapshot.is_default),
-    );
-    push_field_change(
-        &mut field_changes,
-        "optimizationSettings",
-        option_optimization_as_string(&current.optimization_settings),
-        option_optimization_as_string(&snapshot.optimization_settings),
-    );
-
-    if field_changes.is_empty() {
-        None
-    } else {
-        Some(ChangedEntry {
-            name: snapshot.name.clone(),
-            field_changes,
-        })
-    }
-}
-
-fn diff_snapshot_with_current(
-    snapshot: &DatabaseFile,
-    current: &DatabaseFile,
-) -> SnapshotDiffResult {
-    let snapshot_by_name: HashMap<&str, &DatabaseEntry> = snapshot
-        .databases
-        .iter()
-        .map(|entry| (entry.name.as_str(), entry))
-        .collect();
-    let current_by_name: HashMap<&str, &DatabaseEntry> = current
-        .databases
-        .iter()
-        .map(|entry| (entry.name.as_str(), entry))
-        .collect();
-
-    let mut added = snapshot
-        .databases
-        .iter()
-        .filter(|entry| !current_by_name.contains_key(entry.name.as_str()))
-        .map(|entry| entry.name.clone())
-        .collect::<Vec<_>>();
-    added.sort();
-
-    let mut removed = current
-        .databases
-        .iter()
-        .filter(|entry| !snapshot_by_name.contains_key(entry.name.as_str()))
-        .map(|entry| entry.name.clone())
-        .collect::<Vec<_>>();
-    removed.sort();
-
-    let mut changed = snapshot
-        .databases
-        .iter()
-        .filter_map(|snapshot_entry| {
-            let current_entry = current_by_name.get(snapshot_entry.name.as_str())?;
-            build_changed_entry(snapshot_entry, current_entry)
-        })
-        .collect::<Vec<_>>();
-    changed.sort_by(|a, b| a.name.cmp(&b.name));
-
-    SnapshotDiffResult {
-        summary: DiffSummary {
-            added_count: added.len(),
-            removed_count: removed.len(),
-            changed_count: changed.len(),
-        },
-        added,
-        removed,
-        changed,
-    }
 }
 
 #[tauri::command]
@@ -889,7 +590,7 @@ fn upsert_database_entry(
     }
 
     let path = current_path(&state)?;
-    let mut file = read_database_file(&path).unwrap_or(DatabaseFile { databases: vec![] });
+    let mut file = read_database_file_strict(&path, "保存")?;
     let normalized = entry.normalized();
 
     if let Some(position) = file
@@ -902,13 +603,7 @@ fn upsert_database_entry(
         file.databases.push(normalized);
     }
 
-    if let Err(err) = create_snapshot_before_change(&path) {
-        eprintln!("{}", err);
-    }
     write_database_file(&path, &file)?;
-    if let Err(err) = prune_snapshots(&path, SNAPSHOT_KEEP_COUNT) {
-        eprintln!("{}", err);
-    }
     Ok(file)
 }
 
@@ -922,7 +617,7 @@ fn delete_database_entry(
     }
 
     let path = current_path(&state)?;
-    let mut file = read_database_file(&path).unwrap_or(DatabaseFile { databases: vec![] });
+    let mut file = read_database_file_strict(&path, "删除")?;
     let before = file.databases.len();
     file.databases.retain(|item| item.name != name);
 
@@ -930,13 +625,7 @@ fn delete_database_entry(
         return Err("未找到对应名称的配置".into());
     }
 
-    if let Err(err) = create_snapshot_before_change(&path) {
-        eprintln!("{}", err);
-    }
     write_database_file(&path, &file)?;
-    if let Err(err) = prune_snapshots(&path, SNAPSHOT_KEEP_COUNT) {
-        eprintln!("{}", err);
-    }
     Ok(file)
 }
 
@@ -962,33 +651,15 @@ fn import_database_entries(
             databases: normalized_imported,
         },
         "merge" => {
-            let mut current = read_database_file(&current_file_path)
-                .unwrap_or(DatabaseFile { databases: vec![] });
-            for incoming in normalized_imported {
-                if let Some(position) = current
-                    .databases
-                    .iter()
-                    .position(|item| item.name == incoming.name)
-                {
-                    current.databases[position] = incoming;
-                } else {
-                    current.databases.push(incoming);
-                }
-            }
-            current
+            let current = read_database_file_strict(&current_file_path, "导入(merge)")?;
+            merge_database_entries(current, normalized_imported)
         }
         _ => {
             return Err("导入模式不支持，请使用 merge 或 replace".to_string());
         }
     };
 
-    if let Err(err) = create_snapshot_before_change(&current_file_path) {
-        eprintln!("{}", err);
-    }
     write_database_file(&current_file_path, &next_file)?;
-    if let Err(err) = prune_snapshots(&current_file_path, SNAPSHOT_KEEP_COUNT) {
-        eprintln!("{}", err);
-    }
 
     Ok(next_file)
 }
@@ -1008,45 +679,6 @@ fn export_database_entries(path: String, entries: Vec<DatabaseEntry>) -> Result<
             .collect::<Vec<_>>(),
     };
     write_database_file(&export_path, &payload)
-}
-
-#[tauri::command]
-fn list_snapshots(state: tauri::State<AppState>) -> Result<Vec<SnapshotMeta>, String> {
-    let target_path = current_path(&state)?;
-    list_snapshots_for_target(&target_path)
-}
-
-#[tauri::command]
-fn restore_snapshot(
-    snapshot_file: String,
-    state: tauri::State<AppState>,
-) -> Result<DatabaseFile, String> {
-    let target_path = current_path(&state)?;
-    let snapshot_path = ensure_snapshot_path(&snapshot_file, &target_path)?;
-    let snapshot_data = read_database_file(&snapshot_path)?;
-
-    if let Err(err) = create_snapshot_before_change(&target_path) {
-        eprintln!("{}", err);
-    }
-    write_database_file(&target_path, &snapshot_data)?;
-    if let Err(err) = prune_snapshots(&target_path, SNAPSHOT_KEEP_COUNT) {
-        eprintln!("{}", err);
-    }
-
-    Ok(snapshot_data)
-}
-
-#[tauri::command]
-fn compare_snapshot_with_current(
-    snapshot_file: String,
-    state: tauri::State<AppState>,
-) -> Result<SnapshotDiffResult, String> {
-    let target_path = current_path(&state)?;
-    let snapshot_path = ensure_snapshot_path(&snapshot_file, &target_path)?;
-    let snapshot_data = read_database_file(&snapshot_path)?;
-    let current_data =
-        read_database_file(&target_path).unwrap_or(DatabaseFile { databases: vec![] });
-    Ok(diff_snapshot_with_current(&snapshot_data, &current_data))
 }
 
 #[tauri::command]
@@ -1128,9 +760,6 @@ pub fn run() {
             delete_database_entry,
             import_database_entries,
             export_database_entries,
-            list_snapshots,
-            restore_snapshot,
-            compare_snapshot_with_current,
             validate_database_entry,
             test_database_connection
         ])
@@ -1142,4 +771,109 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_entry(name: &str, db_type: &str, connection_string: &str) -> DatabaseEntry {
+        DatabaseEntry {
+            name: name.to_string(),
+            connection_string: connection_string.to_string(),
+            db_type: db_type.to_string(),
+            description: None,
+            is_default: None,
+            optimization_settings: None,
+        }
+    }
+
+    #[test]
+    fn parse_kv_connection_string_works_with_invalid_chunks_ignored() {
+        let params = parse_kv_connection_string(
+            " Host = localhost ; invalid ; Port=5432; User_Name = postgres ; ; Password='123' ",
+        );
+
+        assert_eq!(params.get("host").map(String::as_str), Some("localhost"));
+        assert_eq!(params.get("port").map(String::as_str), Some("5432"));
+        assert_eq!(params.get("username").map(String::as_str), Some("postgres"));
+        assert_eq!(params.get("password").map(String::as_str), Some("123"));
+        assert!(!params.contains_key("invalid"));
+    }
+
+    #[test]
+    fn validate_connection_string_for_postgresql_requires_host_and_user() {
+        let result = validate_connection_string("PostgreSQL", "Port=5432;Database=postgres;");
+
+        assert!(!result.valid);
+        assert_eq!(result.message, "连接字符串校验失败");
+        assert!(result
+            .detail
+            .unwrap_or_default()
+            .contains("连接字符串缺少必填字段"));
+    }
+
+    #[test]
+    fn validate_connection_string_for_mysql_detects_invalid_port() {
+        let result = validate_connection_string(
+            "MySql",
+            "Host=localhost;User=root;Port=invalid;Database=test;",
+        );
+
+        assert!(!result.valid);
+        assert_eq!(result.message, "连接字符串校验失败");
+        assert!(result.detail.unwrap_or_default().contains("端口格式不正确"));
+    }
+
+    #[test]
+    fn validate_connection_string_for_sqlserver_and_sqlite_can_pass() {
+        let sqlserver_result = validate_connection_string(
+            "SqlServer",
+            "Server=localhost;User Id=sa;Password=123456;Port=1433;",
+        );
+        assert!(sqlserver_result.valid);
+
+        let sqlite_result =
+            validate_connection_string("Sqlite", "Data Source=./data/local.db;Mode=ReadWriteCreate;");
+        assert!(sqlite_result.valid);
+    }
+
+    #[test]
+    fn validate_connection_string_for_unsupported_type_uses_basic_rule_message() {
+        let result = validate_connection_string("Oracle", "Host=localhost;User ID=system;");
+
+        assert!(result.valid);
+        assert!(result
+            .message
+            .contains("暂未提供强校验规则，已通过基础格式校验"));
+    }
+
+    #[test]
+    fn merge_database_entries_overwrites_same_name_and_appends_new() {
+        let current = DatabaseFile {
+            databases: vec![
+                make_entry("main", "PostgreSQL", "Host=old;User=old;"),
+                make_entry("analytics", "MySql", "Host=mysql;User=root;"),
+            ],
+        };
+        let incoming = vec![
+            make_entry("main", "PostgreSQL", "Host=new;User=new;"),
+            make_entry("report", "Sqlite", "Data Source=./report.db;"),
+        ];
+
+        let merged = merge_database_entries(current, incoming);
+
+        assert_eq!(merged.databases.len(), 3);
+        let main = merged
+            .databases
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main should exist");
+        assert_eq!(main.connection_string, "Host=new;User=new;");
+        assert!(merged.databases.iter().any(|entry| entry.name == "report"));
+        assert!(merged
+            .databases
+            .iter()
+            .any(|entry| entry.name == "analytics"));
+    }
 }

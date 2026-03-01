@@ -1,7 +1,46 @@
-# Tauri + React + Typescript
+# Database JSON Manager
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+一个基于 **Tauri + React + TypeScript** 的本地 `database.json` 管理工具，支持配置编辑、导入导出、连接字符串校验与连接测试。
 
-## Recommended IDE Setup
+## 主要能力
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- 配置文件路径管理（本地缓存最近路径）
+- 配置项新增 / 更新 / 删除（按名称 upsert）
+- 筛选与搜索（名称/类型/默认项）
+- JSON 导入（`merge` / `replace`）与按筛选导出
+- 单条与批量连接测试
+- 只读 JSON 预览
+
+## 本次优化说明
+
+- **后端安全增强**：保存、删除、merge 导入前会严格读取当前文件；读取失败时阻断写入，避免空数据覆盖。
+- **前端结构重构**：`App.tsx` 拆分为组件和 hooks，减少单文件复杂度。
+- **数据库类型单源化**：新增 `src/dbCatalog.ts` 统一维护模板与连接测试能力。
+- **能力感知交互**：未支持测试连接的数据库类型会在按钮禁用时明确提示原因。
+
+## 开发命令
+
+```bash
+pnpm install
+pnpm dev
+pnpm tauri dev
+pnpm build
+```
+
+Rust 单测：
+
+```bash
+cd src-tauri
+cargo test
+```
+
+## 手工烟测建议
+
+1. 选择一个可读写的 JSON 配置路径并加载。
+2. 新建一条记录并保存，确认预览区更新。
+3. 编辑已有记录并保存，确认按名称覆盖。
+4. 删除一条记录并验证列表与预览同步。
+5. 执行导入（`merge` / `replace`）并检查结果差异。
+6. 导出当前筛选结果并确认导出文件内容。
+7. 对支持测试的类型执行单条与批量测试。
+8. 验证未支持测试的类型按钮禁用且有说明文案。

@@ -39,12 +39,12 @@ tauri-plugin-single-instance = "2"
 
 2. 运行第一个实例：
    ```bash
-   .\target\release\tauri-db-manager.exe
+   .\target\release\database-json-manager.exe
    ```
 
 3. 尝试运行第二个实例（应该会激活第一个实例而不是打开新窗口）：
    ```bash
-   .\target\release\tauri-db-manager.exe
+   .\target\release\database-json-manager.exe
    ```
 
 ## 注意事项

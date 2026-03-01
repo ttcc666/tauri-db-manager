@@ -4,6 +4,18 @@ export interface OptimizationSettings {
   identityStrategy?: string;
 }
 
+export interface Notice {
+  severity: "success" | "error" | "info";
+  text: string;
+}
+
+export interface DbCatalogItem {
+  dbType: string;
+  template: string;
+  supportsConnectionTest: boolean;
+  testSupportNote: string;
+}
+
 export interface DatabaseEntry {
   name: string;
   connectionString: string;
@@ -40,33 +52,4 @@ export interface BatchTestSummary {
 
 export type ImportMode = "merge" | "replace";
 
-export interface SnapshotMeta {
-  fileName: string;
-  fullPath: string;
-  createdAt: string;
-  size: number;
-}
-
-export interface DiffSummary {
-  addedCount: number;
-  removedCount: number;
-  changedCount: number;
-}
-
-export interface FieldChange {
-  field: string;
-  before?: string | null;
-  after?: string | null;
-}
-
-export interface ChangedEntry {
-  name: string;
-  fieldChanges: FieldChange[];
-}
-
-export interface SnapshotDiffResult {
-  summary: DiffSummary;
-  added: string[];
-  removed: string[];
-  changed: ChangedEntry[];
-}
+export type FilterDefault = "ALL" | "DEFAULT_ONLY" | "NON_DEFAULT";

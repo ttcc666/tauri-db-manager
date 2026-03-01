@@ -768,6 +768,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "database-json-manager"
+version = "1.0.0"
+dependencies = [
+ "mysql",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-single-instance",
+ "tiberius",
+ "tokio",
+ "tokio-postgres",
+ "tokio-util",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4268,24 +4286,6 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
-]
-
-[[package]]
-name = "tauri-db-manager"
-version = "0.1.0"
-dependencies = [
- "mysql",
- "rusqlite",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-single-instance",
- "tiberius",
- "tokio",
- "tokio-postgres",
- "tokio-util",
 ]
 
 [[package]]

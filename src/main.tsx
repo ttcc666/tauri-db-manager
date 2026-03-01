@@ -6,7 +6,7 @@ import App from "./App";
 
 type ThemeMode = "light" | "dark" | "system";
 
-const THEME_STORAGE_KEY = "tauri-db-manager:theme-mode";
+const THEME_STORAGE_KEY = "database-json-manager:theme-mode";
 const THEME_QUERY = "(prefers-color-scheme: dark)";
 
 const readStoredThemeMode = (): ThemeMode => {
@@ -180,3 +180,4 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <ThemeRoot />
   </React.StrictMode>,
 );
+
